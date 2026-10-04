@@ -53,6 +53,9 @@ class OutboxPublisherIntegrationTest {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private OutboxPublisher outboxPublisher;
+
     @BeforeEach
     void setUp() {
         outboxEventRepository.deleteAll();
@@ -168,5 +171,18 @@ class OutboxPublisherIntegrationTest {
 
         OutboxEvent updatedHealthy2 = outboxEventRepository.findById(healthy2.getId()).orElseThrow();
         assertThat(updatedHealthy2.getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    @Test
+    @DisplayName("publishBatch scheduled entry point publishes due outbox events")
+    void testPublishBatchScheduledEntryPoint() {
+        OutboxEvent event = new OutboxEvent("RESERVATION", UUID.randomUUID().toString(), "ReservationCreated", "{}");
+        event = outboxEventRepository.save(event);
+
+        outboxPublisher.publishBatch();
+
+        OutboxEvent published = outboxEventRepository.findById(event.getId()).orElseThrow();
+        assertThat(published.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(published.getPublishedAt()).isNotNull();
     }
 }

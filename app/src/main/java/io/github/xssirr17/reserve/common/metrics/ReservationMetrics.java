@@ -18,6 +18,7 @@ public class ReservationMetrics {
     private final Counter idempotencyReplays;
     private final Counter cacheHits;
     private final Counter cacheMisses;
+    private final Counter reservationExpiryBatchFailures;
 
     private final AtomicLong lastExpiryDurationMs = new AtomicLong(0);
     private final AtomicInteger lastExpiryBatchRows = new AtomicInteger(0);
@@ -45,6 +46,9 @@ public class ReservationMetrics {
             .register(registry);
         this.cacheMisses = Counter.builder("cache_misses")
             .description("Total availability cache misses")
+            .register(registry);
+        this.reservationExpiryBatchFailures = Counter.builder("reservation_expiry_batch_failures")
+            .description("Total failed reservation expiry batches")
             .register(registry);
 
         Gauge.builder("scheduler_job_duration_seconds", lastExpiryDurationMs, val -> val.get() / 1000.0)
@@ -104,5 +108,9 @@ public class ReservationMetrics {
     public void recordOutboxBatch(int count, long durationMs) {
         lastOutboxBatchRows.set(count);
         lastOutboxDurationMs.set(durationMs);
+    }
+
+    public void incrementExpiryBatchFailures() {
+        reservationExpiryBatchFailures.increment();
     }
 }
