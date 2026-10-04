@@ -180,7 +180,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/resources?page=0&size=10&sort=name%2Casc",
+              "raw": "{{baseUrl}}/api/resources?page=0&size=10&sort=name,asc",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -390,7 +390,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/availability?from=%7B%7BavailFrom%7D%7D&to=%7B%7BavailTo%7D%7D&page=0&size=10",
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/availability?from={{availFrom}}&to={{availTo}}&page=0&size=10",
               "host": [
                 "{{baseUrl}}"
               ],
