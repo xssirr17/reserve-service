@@ -1,20 +1,33 @@
 spring:
+  profiles:
+    default: dev
   datasource:
-    url: jdbc:postgresql://localhost:5432/reserve
-    username: postgres
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/reserve}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
   jpa:
     hibernate:
       ddl-auto: validate
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: never
 
 server:
   error:
-    include-message: always
-    include-binding-errors: always
+    include-message: never
+    include-binding-errors: never
 
 logging:
   level:
-    org.springframework.web: DEBUG
+    root: INFO
+    org.springframework.web: INFO

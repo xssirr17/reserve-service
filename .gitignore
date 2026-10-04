@@ -6,3 +6,23 @@ build
 
 # Ignore Kotlin plugin data
 .kotlin
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and Editor
+.idea
+*.iml
+*.ipr
+*.iws
+.vscode
+.settings
+.project
+.classpath
+
+# Logs & temp data
+*.log
+logs/
+pgdata/

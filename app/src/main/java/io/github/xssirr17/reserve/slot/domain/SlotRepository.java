@@ -38,6 +38,18 @@ public interface SlotRepository extends JpaRepository<Slot, UUID> {
         Pageable pageable
     );
 
+    @Query("""
+        SELECT COUNT(s) > 0 FROM Slot s
+        WHERE s.resourceId = :resourceId
+          AND s.startTime < :endTime
+          AND s.endTime > :startTime
+    """)
+    boolean hasOverlappingSlot(
+        @Param("resourceId") UUID resourceId,
+        @Param("startTime") Instant startTime,
+        @Param("endTime") Instant endTime
+    );
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
         UPDATE Slot s

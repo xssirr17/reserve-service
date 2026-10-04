@@ -3,6 +3,7 @@ package io.github.xssirr17.reserve.reservation.api;
 import io.github.xssirr17.reserve.reservation.dto.CreateReservationRequest;
 import io.github.xssirr17.reserve.reservation.dto.ReservationResponse;
 import io.github.xssirr17.reserve.reservation.service.ReservationService;
+import io.github.xssirr17.reserve.saga.ReservationSagaCoordinator;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,21 +23,25 @@ import java.util.UUID;
 public class ReservationController {
 
     private final ReservationService reservationService;
+    private final ReservationSagaCoordinator sagaCoordinator;
 
-    public ReservationController(ReservationService reservationService) {
+    public ReservationController(ReservationService reservationService,
+                                 ReservationSagaCoordinator sagaCoordinator) {
         this.reservationService = reservationService;
+        this.sagaCoordinator = sagaCoordinator;
     }
 
     /**
      * Create a reservation for a given slot.
+     * Idempotency-Key header is required on create per system specification.
      *
-     * @param idempotencyKey optional client idempotency key (header documented, not yet enforced)
-     * @param request        reservation creation payload
+     * @param idempotencyKey client idempotency key
+     * @param request        reservation payload
      * @return 201 Created with Location header and ReservationResponse
      */
     @PostMapping
     public ResponseEntity<ReservationResponse> createReservation(
-        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+        @RequestHeader(value = "Idempotency-Key", required = true) String idempotencyKey,
         @RequestBody @Valid CreateReservationRequest request
     ) {
         ReservationResponse response = reservationService.createReservation(request, idempotencyKey);
@@ -52,9 +57,12 @@ public class ReservationController {
         return ResponseEntity.ok(reservationService.getReservation(id));
     }
 
+    /**
+     * Confirm a reservation via the confirmation saga (external payment step + DB confirmation/compensation).
+     */
     @PostMapping("/{id}/confirm")
     public ResponseEntity<ReservationResponse> confirmReservation(@PathVariable UUID id) {
-        return ResponseEntity.ok(reservationService.confirmReservation(id));
+        return ResponseEntity.ok(sagaCoordinator.executeConfirmationSaga(id));
     }
 
     @PostMapping("/{id}/cancel")

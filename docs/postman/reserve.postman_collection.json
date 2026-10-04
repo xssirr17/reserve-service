@@ -1,0 +1,1443 @@
+{
+  "info": {
+    "_postman_id": "c4b1897e-d3a9-467f-b67e-4091bc2d861e",
+    "name": "Reserve Service API",
+    "description": "Complete Postman collection for the Spring Boot 3 Generic Reservation Microservice.\n\nCovering:\n- 00 - Health: Actuator health check\n- 01 - Resources: CRUD and pagination\n- 02 - Slots: Creation, dynamic future time windows, and availability cache-aside\n- 03 - Reservations: Atomic creation, saga confirmation, idempotent cancellation\n- 04 - Idempotency: Replay, conflict detection (422), missing header validation\n- 05 - Errors: Exhaustive RFC 7807 Problem Details test suite",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 - Health",
+      "description": "Actuator health and readiness checks.",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Service status is UP\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.status).to.eql(\"UP\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Checks application readiness and liveness via Spring Boot Actuator.\n\nExpected Response:\n- 200 OK: Application is UP (`{\"status\": \"UP\"}`)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "01 - Resources",
+      "description": "Manages schedulable resources (e.g. rooms, equipment). Supports creating resources, lookup by UUID, and paginated listing with optional type filtering.",
+      "item": [
+        {
+          "name": "Create Resource",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 Created\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Location header is present\", function () {",
+                  "    pm.response.to.have.header(\"Location\");",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Resource response has ID and matches input\", function () {",
+                  "    pm.expect(jsonData.id).to.be.a(\"string\");",
+                  "    pm.expect(jsonData.name).to.eql(\"Meeting Room 101\");",
+                  "    pm.expect(jsonData.type).to.eql(\"CONFERENCE_ROOM\");",
+                  "    pm.expect(jsonData.metadata.capacity).to.eql(12);",
+                  "    pm.expect(jsonData.createdAt).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "pm.environment.set(\"resourceId\", jsonData.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources"
+              ]
+            },
+            "description": "Creates a new resource entity.\n\nExpected Responses:\n- 201 Created: Returns ResourceResponse with Location header pointing to `/api/resources/{id}`.\n- 400 Bad Request: Missing required name or type.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Meeting Room 101\",\n  \"type\": \"CONFERENCE_ROOM\",\n  \"metadata\": {\n    \"capacity\": 12,\n    \"features\": [\n      \"projector\",\n      \"whiteboard\",\n      \"teleconferencing\"\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Resource by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Returned resource matches environment resourceId\", function () {",
+                  "    pm.expect(jsonData.id).to.eql(pm.environment.get(\"resourceId\"));",
+                  "    pm.expect(jsonData.name).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}"
+              ]
+            },
+            "description": "Retrieves a resource by its UUID.\n\nExpected Responses:\n- 200 OK: Returns ResourceResponse.\n- 404 Not Found: Resource does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "List Resources (Paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Response is a paginated list\", function () {",
+                  "    pm.expect(jsonData).to.have.property(\"content\");",
+                  "    pm.expect(jsonData.content).to.be.an(\"array\");",
+                  "    pm.expect(jsonData).to.have.property(\"totalElements\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources?page=0&size=10&sort=name%2Casc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "Page index (0-based)"
+                },
+                {
+                  "key": "size",
+                  "value": "10",
+                  "description": "Page size"
+                },
+                {
+                  "key": "sort",
+                  "value": "name,asc",
+                  "description": "Sorting criteria"
+                }
+              ]
+            },
+            "description": "Returns a paginated list of all resources.\n\nExpected Responses:\n- 200 OK: Returns Spring Data `Page<ResourceResponse>`."
+          },
+          "response": []
+        },
+        {
+          "name": "List Resources Filtered by Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"All returned items match type CONFERENCE_ROOM\", function () {",
+                  "    pm.expect(jsonData.content).to.be.an(\"array\");",
+                  "    jsonData.content.forEach(function (item) {",
+                  "        pm.expect(item.type).to.eql(\"CONFERENCE_ROOM\");",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources?type=CONFERENCE_ROOM&page=0&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "CONFERENCE_ROOM",
+                  "description": "Filter by resource type"
+                },
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "Page index (0-based)"
+                },
+                {
+                  "key": "size",
+                  "value": "10",
+                  "description": "Page size"
+                }
+              ]
+            },
+            "description": "Returns resources matching the specified `type` query parameter.\n\nExpected Responses:\n- 200 OK: Filtered paginated list of resources."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 - Slots",
+      "description": "Manages bookable time slots for resources. Enforces validation (future dates, end > start, positive capacity, no overlapping windows for the same resource) and provides Redis cache-aside availability queries.",
+      "item": [
+        {
+          "name": "Create Slot for Resource",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Calculate future ISO-8601 timestamps: start = now + 24 hours, end = now + 26 hours",
+                  "const now = Date.now();",
+                  "const startTime = new Date(now + 24 * 60 * 60 * 1000).toISOString();",
+                  "const endTime = new Date(now + 26 * 60 * 60 * 1000).toISOString();",
+                  "",
+                  "pm.variables.set(\"slotStartTime\", startTime);",
+                  "pm.variables.set(\"slotEndTime\", endTime);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 Created\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Location header is present\", function () {",
+                  "    pm.response.to.have.header(\"Location\");",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Slot response has valid structure\", function () {",
+                  "    pm.expect(jsonData.id).to.be.a(\"string\");",
+                  "    pm.expect(jsonData.resourceId).to.eql(pm.environment.get(\"resourceId\"));",
+                  "    pm.expect(jsonData.capacity).to.eql(10);",
+                  "    pm.expect(jsonData.reserved).to.eql(0);",
+                  "});",
+                  "",
+                  "pm.environment.set(\"slotId\", jsonData.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}",
+                "slots"
+              ]
+            },
+            "description": "Creates a new bookable time slot for the specified resource. Start and end times are generated dynamically in the future via pre-request script.\n\nExpected Responses:\n- 201 Created: Returns SlotResponse with Location header pointing to `/api/resources/{resourceId}/slots/{id}`.\n- 400 Bad Request: End time before start time, or capacity <= 0.\n- 404 Not Found: Resource not found.\n- 409 Conflict: Past slot or overlapping slot window.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"startTime\": \"{{slotStartTime}}\",\n  \"endTime\": \"{{slotEndTime}}\",\n  \"capacity\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Slot Availability",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Search window: from now up to 7 days in the future",
+                  "const now = new Date();",
+                  "const to = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);",
+                  "",
+                  "pm.variables.set(\"availFrom\", now.toISOString());",
+                  "pm.variables.set(\"availTo\", to.toISOString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Availability response contains content array\", function () {",
+                  "    pm.expect(jsonData).to.have.property(\"content\");",
+                  "    pm.expect(jsonData.content).to.be.an(\"array\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/availability?from=%7B%7BavailFrom%7D%7D&to=%7B%7BavailTo%7D%7D&page=0&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}",
+                "availability"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{availFrom}}",
+                  "description": "Search window start (ISO-8601)"
+                },
+                {
+                  "key": "to",
+                  "value": "{{availTo}}",
+                  "description": "Search window end (ISO-8601)"
+                },
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "Page index"
+                },
+                {
+                  "key": "size",
+                  "value": "10",
+                  "description": "Page size"
+                }
+              ]
+            },
+            "description": "Queries available slots for a resource in interval `[from, to]`. Served from Redis cache-aside where available, falling back gracefully to PostgreSQL on cache miss or Redis outage.\n\nExpected Responses:\n- 200 OK: Paginated list of slots in interval."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 - Reservations",
+      "description": "Manages the lifecycle of reservations (PENDING -> CONFIRMED / CANCELLED). Creating a reservation atomically decrements available slot capacity and records an outbox event. Confirmation is coordinated via an external payment saga. Cancellation idempotently releases capacity.\n\nNote: A 'list by user' endpoint is not exposed by ReservationController (even though the underlying service supports it).",
+      "item": [
+        {
+          "name": "Create Reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 Created\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Location header is present\", function () {",
+                  "    pm.response.to.have.header(\"Location\");",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Reservation is in PENDING state\", function () {",
+                  "    pm.expect(jsonData.id).to.be.a(\"string\");",
+                  "    pm.expect(jsonData.slotId).to.eql(pm.environment.get(\"slotId\"));",
+                  "    pm.expect(jsonData.userId).to.eql(pm.environment.get(\"userId\"));",
+                  "    pm.expect(jsonData.quantity).to.eql(2);",
+                  "    pm.expect(jsonData.status).to.eql(\"PENDING\");",
+                  "    pm.expect(jsonData.expiresAt).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "pm.environment.set(\"reservationId\", jsonData.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Creates a reservation for a given slot. Atomically updates slot capacity and places reservation in PENDING status with hold expiration.\n\nRequired Headers:\n- `Idempotency-Key`: UUID or unique key preventing duplicate booking.\n\nExpected Responses:\n- 201 Created: Returns ReservationResponse with status PENDING and hold expiration.\n- 400 Bad Request: Missing Idempotency-Key header or invalid body.\n- 404 Not Found: Slot does not exist.\n- 409 Conflict: Insufficient capacity or slot in past.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Reservation by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Reservation matches environment reservationId\", function () {",
+                  "    pm.expect(jsonData.id).to.eql(pm.environment.get(\"reservationId\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations/{{reservationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservationId}}"
+              ]
+            },
+            "description": "Fetches reservation details by UUID.\n\nExpected Responses:\n- 200 OK: Returns ReservationResponse.\n- 404 Not Found: Reservation not found."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Reservation status transitioned to CONFIRMED\", function () {",
+                  "    pm.expect(jsonData.id).to.eql(pm.environment.get(\"reservationId\"));",
+                  "    pm.expect(jsonData.status).to.eql(\"CONFIRMED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations/{{reservationId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservationId}}",
+                "confirm"
+              ]
+            },
+            "description": "Executes the confirmation saga. Calls external payment gateway outside DB transaction, then acquires pessimistic row lock to transition PENDING -> CONFIRMED. Subsequent calls on an already CONFIRMED reservation are idempotent.\n\nExpected Responses:\n- 200 OK: Status updated to CONFIRMED.\n- 404 Not Found: Reservation not found.\n- 409 Conflict: Reservation expired or invalid state transition."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Reservation status transitioned to CANCELLED\", function () {",
+                  "    pm.expect(jsonData.id).to.eql(pm.environment.get(\"reservationId\"));",
+                  "    pm.expect(jsonData.status).to.eql(\"CANCELLED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations/{{reservationId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservationId}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancels reservation and releases slot capacity. Locks reservation row first, transitions to CANCELLED, and releases capacity. Re-calling cancel on an already CANCELLED reservation is idempotent and does not release capacity a second time.\n\nExpected Responses:\n- 200 OK: Status updated to CANCELLED.\n- 404 Not Found: Reservation not found.\n- 409 Conflict: Terminal state (EXPIRED, COMPLETED)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 - Idempotency",
+      "description": "Demonstrates the Idempotency-Key protocol on `POST /api/reservations`.\n\nFlow tested in order:\n1. Create reservation with fresh key -> 201 Created, response saved.\n2. Replay with the same key and identical body -> 201 Created with exact same stored response; no second reservation created.\n3. Same key with different body payload -> 422 Unprocessable Entity (Idempotency Conflict).\n4. Request omitting required Idempotency-Key -> 400/500 error.\n\nNote on Concurrent Requests:\nTesting the concurrent 'same key in-flight -> 409 with Retry-After' scenario cannot be performed sequentially in Postman Collection Runner because it executes requests serially. To simulate concurrent in-flight requests, launch simultaneous parallel requests using curl or a load tool:\n```bash\ncurl -X POST http://localhost:8080/api/reservations \\\n  -H 'Idempotency-Key: test-race-123' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"slotId\":\"...\",\"userId\":\"user-1\",\"quantity\":1}' &\ncurl -X POST http://localhost:8080/api/reservations \\\n  -H 'Idempotency-Key: test-race-123' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"slotId\":\"...\",\"userId\":\"user-1\",\"quantity\":1}' &\n```",
+      "item": [
+        {
+          "name": "1. Create Reservation (Fresh Key)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const freshKey = pm.variables.replaceIn('{{$guid}}');",
+                  "pm.environment.set(\"idempotencyKey\", freshKey);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 Created\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Reservation created in PENDING state\", function () {",
+                  "    pm.expect(jsonData.id).to.be.a(\"string\");",
+                  "    pm.expect(jsonData.status).to.eql(\"PENDING\");",
+                  "});",
+                  "",
+                  "pm.environment.set(\"idempotencyReservationId\", jsonData.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Initial request with a fresh idempotency key generated in the pre-request script. Successfully claims key, creates reservation, stores response, and commits.\n\nExpected Response:\n- 201 Created: Reservation created in PENDING status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2. Replay Reservation (Same Key & Same Body)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 Created (replayed response)\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Idempotent replay returned exact same reservation ID (no duplicate created)\", function () {",
+                  "    pm.expect(jsonData.id).to.eql(pm.environment.get(\"idempotencyReservationId\"));",
+                  "    pm.expect(jsonData.quantity).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Replays the exact same request body with the exact same Idempotency-Key. The service matches the request hash, detects COMPLETED status, and replays the stored response without re-executing business logic.\n\nExpected Response:\n- 201 Created: Identical response returned; reservation ID matches previous request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3. Idempotency Conflict (Same Key & Different Body)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 422 Unprocessable Entity\", function () {",
+                  "    pm.response.to.have.status(422);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Response is RFC 7807 Idempotency Conflict problem\", function () {",
+                  "    pm.expect(jsonData.type).to.include(\"urn:problem-type:idempotency-conflict\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Idempotency Conflict\");",
+                  "    pm.expect(jsonData.status).to.eql(422);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Re-sends the same Idempotency-Key but with a mutated payload (quantity changed to 5). The SHA-256 hash comparison fails.\n\nExpected Response:\n- 422 Unprocessable Entity: RFC 7807 problem details with title 'Idempotency Conflict'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4. Missing Required Idempotency-Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Rejects request when Idempotency-Key is missing (400 or 500 Problem Detail)\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([400, 500]);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Response is RFC 7807 Problem Detail\", function () {",
+                  "    pm.expect(jsonData).to.have.property(\"type\");",
+                  "    pm.expect(jsonData).to.have.property(\"title\");",
+                  "    pm.expect(jsonData).to.have.property(\"status\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Attempts to create a reservation without providing the required `Idempotency-Key` header.\n\nExpected Response:\n- 400 Bad Request or 500 Internal Server Error (Spring throws MissingRequestHeaderException).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 - Errors",
+      "description": "Validates every error condition and RFC 7807 Problem Detail response produced by the application and GlobalExceptionHandler.",
+      "item": [
+        {
+          "name": "400 - Validation Error (Blank Name)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Validation Error structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:validation-error\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Bad Request\");",
+                  "    pm.expect(jsonData.status).to.eql(400);",
+                  "    pm.expect(jsonData).to.have.property(\"errors\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources"
+              ]
+            },
+            "description": "Triggers validation errors on `CreateResourceRequest` (@NotBlank name, @NotBlank type, @NotNull metadata).\n\nExpected Response:\n- 400 Bad Request with Problem Detail type `urn:problem-type:validation-error` and an `errors` map.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"\",\n  \"type\": \"   \",\n  \"metadata\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 - Invalid Slot Window (End Before Start)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 validation error contains time range message\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:validation-error\");",
+                  "    pm.expect(jsonData.status).to.eql(400);",
+                  "    pm.expect(JSON.stringify(jsonData.errors)).to.include(\"endTime must be after startTime\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}",
+                "slots"
+              ]
+            },
+            "description": "Violates `@AssertTrue(message = \"endTime must be after startTime\")` on CreateSlotRequest.\n\nExpected Response:\n- 400 Bad Request with Problem Detail type `urn:problem-type:validation-error`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"startTime\": \"2026-10-10T12:00:00Z\",\n  \"endTime\": \"2026-10-10T10:00:00Z\",\n  \"capacity\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 - Type Mismatch (Invalid UUID in Path)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Type Mismatch structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:type-mismatch\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Bad Request\");",
+                  "    pm.expect(jsonData.status).to.eql(400);",
+                  "    pm.expect(jsonData.detail).to.include(\"Parameter 'id' should be of type 'UUID'\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/not-a-valid-uuid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "not-a-valid-uuid"
+              ]
+            },
+            "description": "Sends a non-UUID string into a `@PathVariable UUID` parameter, triggering MethodArgumentTypeMismatchException.\n\nExpected Response:\n- 400 Bad Request with Problem Detail type `urn:problem-type:type-mismatch`."
+          },
+          "response": []
+        },
+        {
+          "name": "400 - Malformed JSON Request Body",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Malformed Request structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:malformed-request\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Bad Request\");",
+                  "    pm.expect(jsonData.status).to.eql(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources"
+              ]
+            },
+            "description": "Sends malformed JSON syntax triggering HttpMessageNotReadableException.\n\nExpected Response:\n- 400 Bad Request with Problem Detail type `urn:problem-type:malformed-request`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"name\": \"Broken JSON\", \"type\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "404 - Resource Not Found",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404 Not Found\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Resource Not Found structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:not-found\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Resource Not Found\");",
+                  "    pm.expect(jsonData.status).to.eql(404);",
+                  "    pm.expect(jsonData.detail).to.include(\"Resource not found\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            },
+            "description": "Requests a non-existent resource UUID triggering NotFoundException.\n\nExpected Response:\n- 404 Not Found with Problem Detail type `urn:problem-type:not-found`."
+          },
+          "response": []
+        },
+        {
+          "name": "404 - Slot Not Found on Reservation Create",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404 Not Found\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Slot Not Found structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:not-found\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Resource Not Found\");",
+                  "    pm.expect(jsonData.status).to.eql(404);",
+                  "    pm.expect(jsonData.detail).to.include(\"Slot not found\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Attempts to create a reservation for a non-existent slot UUID.\n\nExpected Response:\n- 404 Not Found with Problem Detail type `urn:problem-type:not-found`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"00000000-0000-0000-0000-000000000000\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "404 - Reservation Not Found",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404 Not Found\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Reservation Not Found structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:not-found\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Resource Not Found\");",
+                  "    pm.expect(jsonData.status).to.eql(404);",
+                  "    pm.expect(jsonData.detail).to.include(\"Reservation not found\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            },
+            "description": "Requests a non-existent reservation UUID.\n\nExpected Response:\n- 404 Not Found with Problem Detail type `urn:problem-type:not-found`."
+          },
+          "response": []
+        },
+        {
+          "name": "409 - Insufficient Capacity",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 409 Conflict\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Insufficient Capacity structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:insufficient-capacity\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Insufficient Capacity\");",
+                  "    pm.expect(jsonData.status).to.eql(409);",
+                  "    pm.expect(jsonData.requested).to.eql(99999);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "Requests a reservation quantity (99999) that exceeds available capacity of the slot.\n\nExpected Response:\n- 409 Conflict with Problem Detail type `urn:problem-type:insufficient-capacity`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slotId\": \"{{slotId}}\",\n  \"userId\": \"{{userId}}\",\n  \"quantity\": 99999\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "409 - Invalid State Transition (Confirm Cancelled Reservation)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 409 Conflict\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Invalid State Transition structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:invalid-state-transition\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Invalid State Transition\");",
+                  "    pm.expect(jsonData.status).to.eql(409);",
+                  "    pm.expect(jsonData.currentStatus).to.eql(\"CANCELLED\");",
+                  "    pm.expect(jsonData.targetStatus).to.eql(\"CONFIRMED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations/{{reservationId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservationId}}",
+                "confirm"
+              ]
+            },
+            "description": "Attempts to confirm `reservationId` which was transitioned to CANCELLED in folder 03. Because CANCELLED is a terminal state, the transition is rejected.\n\nExpected Response:\n- 409 Conflict with Problem Detail type `urn:problem-type:invalid-state-transition`."
+          },
+          "response": []
+        },
+        {
+          "name": "409 - Slot Start Time in the Past",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 409 Conflict\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Conflict structure\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:conflict\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Conflict\");",
+                  "    pm.expect(jsonData.status).to.eql(409);",
+                  "    pm.expect(jsonData.detail).to.include(\"cannot be in the past\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}",
+                "slots"
+              ]
+            },
+            "description": "Attempts to create a slot whose start time is in the past.\n\nExpected Response:\n- 409 Conflict with Problem Detail type `urn:problem-type:conflict` and message 'Slot start time cannot be in the past'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"startTime\": \"2020-01-01T09:00:00Z\",\n  \"endTime\": \"2020-01-01T10:00:00Z\",\n  \"capacity\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "409 - Overlapping Slot Window (GiST Exclusion Conflict)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 409 Conflict\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"RFC 7807 Conflict structure for overlap\", function () {",
+                  "    pm.expect(jsonData.type).to.eql(\"urn:problem-type:conflict\");",
+                  "    pm.expect(jsonData.title).to.eql(\"Conflict\");",
+                  "    pm.expect(jsonData.status).to.eql(409);",
+                  "    pm.expect(jsonData.detail).to.include(\"overlap\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/resources/{{resourceId}}/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "resources",
+                "{{resourceId}}",
+                "slots"
+              ]
+            },
+            "description": "Attempts to create a slot overlapping the exact time window of the slot created in folder 02 for the same resource.\n\nExpected Response:\n- 409 Conflict with Problem Detail type `urn:problem-type:conflict`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"startTime\": \"{{slotStartTime}}\",\n  \"endTime\": \"{{slotEndTime}}\",\n  \"capacity\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

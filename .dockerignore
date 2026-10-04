@@ -1,0 +1,35 @@
+# Version control & metadata
+**/.git
+**/.gitignore
+**/.gitattributes
+
+# Gradle caches and build outputs
+**/.gradle
+**/build
+**/out
+
+# IDE and Editor files
+**/.idea
+**/*.iml
+**/*.ipr
+**/*.iws
+**/.vscode
+**/.settings
+**/.project
+**/.classpath
+
+# Local secrets & environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs and local database storage
+**/logs
+**/*.log
+pgdata/
+
+# Documentation and container config files (not needed in image build context)
+docker-compose*.yml
+Dockerfile*
+README.md
+Makefile
