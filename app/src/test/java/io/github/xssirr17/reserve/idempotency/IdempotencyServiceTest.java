@@ -46,12 +46,25 @@ class IdempotencyServiceTest {
         properties.getIdempotency().setInProgressTimeout(Duration.ofMinutes(2));
         objectMapper = new ObjectMapper();
 
+        org.springframework.transaction.PlatformTransactionManager txManager =
+            new org.springframework.transaction.support.AbstractPlatformTransactionManager() {
+                @Override
+                protected Object doGetTransaction() { return new Object(); }
+                @Override
+                protected void doBegin(Object transaction, org.springframework.transaction.TransactionDefinition definition) {}
+                @Override
+                protected void doCommit(org.springframework.transaction.support.DefaultTransactionStatus status) {}
+                @Override
+                protected void doRollback(org.springframework.transaction.support.DefaultTransactionStatus status) {}
+            };
+
         idempotencyService = new IdempotencyService(
             claimManager,
             repository,
             properties,
             metrics,
-            objectMapper
+            objectMapper,
+            txManager
         );
     }
 

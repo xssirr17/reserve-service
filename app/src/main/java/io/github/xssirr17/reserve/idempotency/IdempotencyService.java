@@ -12,7 +12,8 @@ import io.github.xssirr17.reserve.common.metrics.ReservationMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -32,17 +33,20 @@ public class IdempotencyService {
     private final ReservationMetrics metrics;
     private final ObjectMapper canonicalMapper;
     private final ObjectMapper responseMapper;
+    private final TransactionTemplate transactionTemplate;
 
     public IdempotencyService(IdempotencyClaimManager claimManager,
                               IdempotencyKeyRepository repository,
                               ReservationProperties properties,
                               ReservationMetrics metrics,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              PlatformTransactionManager transactionManager) {
         this.claimManager = claimManager;
         this.repository = repository;
         this.properties = properties;
         this.metrics = metrics;
         this.responseMapper = objectMapper;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.canonicalMapper = JsonMapper.builder()
             .configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true)
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
@@ -52,7 +56,7 @@ public class IdempotencyService {
 
     public <T> T execute(String scope, String key, Object requestBody, Class<T> responseType, Supplier<T> businessOperation) {
         if (key == null || key.isBlank()) {
-            return businessOperation.get();
+            return transactionTemplate.execute(status -> businessOperation.get());
         }
 
         String requestHash = computeHash(requestBody);
@@ -94,33 +98,28 @@ public class IdempotencyService {
         }
 
         try {
-            return executeAndStore(scope, key, responseType, businessOperation);
+            return transactionTemplate.execute(status -> {
+                T result = businessOperation.get();
+                try {
+                    String json = responseMapper.writeValueAsString(result);
+                    IdempotencyKey keyEntity = repository.findById(new IdempotencyKeyId(scope, key))
+                        .orElseThrow(() -> new IllegalStateException("Claimed idempotency key not found: " + key));
+
+                    keyEntity.setStatus(IdempotencyStatus.COMPLETED);
+                    keyEntity.setResponseStatus(200);
+                    keyEntity.setResponseBody(json);
+                    repository.save(keyEntity);
+                } catch (JsonProcessingException e) {
+                    throw new IllegalStateException("Failed to serialize response for idempotency key: " + key, e);
+                }
+                return result;
+            });
         } catch (Exception ex) {
             log.warn("Business operation failed for idempotency key {}/{}, releasing claim: {}",
                 scope, key, ex.getMessage());
             claimManager.releaseClaim(scope, key);
             throw ex;
         }
-    }
-
-    @Transactional
-    public <T> T executeAndStore(String scope, String key, Class<T> responseType, Supplier<T> businessOperation) {
-        T result = businessOperation.get();
-
-        try {
-            String json = responseMapper.writeValueAsString(result);
-            IdempotencyKey keyEntity = repository.findById(new IdempotencyKeyId(scope, key))
-                .orElseThrow(() -> new IllegalStateException("Claimed idempotency key not found: " + key));
-
-            keyEntity.setStatus(IdempotencyStatus.COMPLETED);
-            keyEntity.setResponseStatus(200);
-            keyEntity.setResponseBody(json);
-            repository.save(keyEntity);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize response for idempotency key: " + key, e);
-        }
-
-        return result;
     }
 
     public String computeHash(Object requestBody) {

@@ -63,6 +63,7 @@ public class ReservationService {
     /**
      * Create a reservation. If an idempotency key is provided, wraps execution with IdempotencyService.
      */
+    @Transactional(rollbackFor = Exception.class)
     public ReservationResponse createReservation(CreateReservationRequest request, String idempotencyKey) {
         String scope = "user:" + request.userId() + ":POST:/api/reservations";
         return idempotencyService.execute(scope, idempotencyKey, request, ReservationResponse.class, () ->
