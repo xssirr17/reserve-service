@@ -6,7 +6,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.Version;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.Instant;
@@ -37,9 +36,13 @@ public class Slot {
     @Column(name = "reserved", nullable = false)
     private Integer reserved = 0;
 
-    @Version
+    /**
+     * Monotonically increasing version counter incremented manually by atomic conditional updates
+     * (reserve/release in SlotRepository). JPA @Version is omitted because optimistic locking
+     * is not used for Slot (capacity is guarded by atomic conditional SQL).
+     */
     @Column(name = "version", nullable = false)
-    private Long version;
+    private Long version = 0L;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

@@ -72,13 +72,13 @@ class ReservationExpiryJobTest {
     @Test
     @DisplayName("processBatch: transitions expired reservations, releases capacity, and writes outbox events")
     void testProcessBatchExpiresAndReleases() {
-        UUID resId1 = UUID.randomUUID();
-        UUID slotId1 = UUID.randomUUID();
+        UUID resId1 = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID slotId1 = UUID.fromString("00000000-0000-0000-0000-000000000010");
         Reservation r1 = new Reservation(slotId1, "user1", 2, ReservationStatus.PENDING, now.minusSeconds(60));
         ReflectionTestUtils.setField(r1, "id", resId1);
 
-        UUID resId2 = UUID.randomUUID();
-        UUID slotId2 = UUID.randomUUID();
+        UUID resId2 = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        UUID slotId2 = UUID.fromString("00000000-0000-0000-0000-000000000020");
         Reservation r2 = new Reservation(slotId2, "user2", 3, ReservationStatus.PENDING, now.minusSeconds(30));
         ReflectionTestUtils.setField(r2, "id", resId2);
 

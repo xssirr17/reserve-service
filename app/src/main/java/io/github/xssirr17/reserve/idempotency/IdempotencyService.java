@@ -55,8 +55,22 @@ public class IdempotencyService {
     }
 
     public <T> T execute(String scope, String key, Object requestBody, Class<T> responseType, Supplier<T> businessOperation) {
+        return execute(scope, key, requestBody, responseType, 200, res -> java.util.Collections.emptyMap(), businessOperation).body();
+    }
+
+    public <T> IdempotentResponse<T> execute(
+        String scope,
+        String key,
+        Object requestBody,
+        Class<T> responseType,
+        int successStatus,
+        java.util.function.Function<T, java.util.Map<String, String>> headerProvider,
+        Supplier<T> businessOperation
+    ) {
         if (key == null || key.isBlank()) {
-            return transactionTemplate.execute(status -> businessOperation.get());
+            T result = transactionTemplate.execute(status -> businessOperation.get());
+            java.util.Map<String, String> headers = headerProvider != null ? headerProvider.apply(result) : java.util.Collections.emptyMap();
+            return new IdempotentResponse<>(successStatus, headers, result);
         }
 
         String requestHash = computeHash(requestBody);
@@ -78,7 +92,11 @@ public class IdempotencyService {
                     metrics.incrementIdempotencyReplays();
                     log.info("Replaying stored response for idempotent key: scope={}, key={}", scope, key);
                     try {
-                        return responseMapper.readValue(existing.getResponseBody(), responseType);
+                        int status = existing.getResponseStatus() != null ? existing.getResponseStatus() : successStatus;
+                        java.util.Map<String, String> headers = existing.getResponseHeaders() != null
+                            ? existing.getResponseHeaders() : java.util.Collections.emptyMap();
+                        T body = responseMapper.readValue(existing.getResponseBody(), responseType);
+                        return new IdempotentResponse<>(status, headers, body);
                     } catch (JsonProcessingException e) {
                         throw new IllegalStateException("Failed to deserialize cached response for key: " + key, e);
                     }
@@ -102,17 +120,21 @@ public class IdempotencyService {
                 T result = businessOperation.get();
                 try {
                     String json = responseMapper.writeValueAsString(result);
+                    java.util.Map<String, String> headers = headerProvider != null ? headerProvider.apply(result) : java.util.Collections.emptyMap();
+
                     IdempotencyKey keyEntity = repository.findById(new IdempotencyKeyId(scope, key))
                         .orElseThrow(() -> new IllegalStateException("Claimed idempotency key not found: " + key));
 
                     keyEntity.setStatus(IdempotencyStatus.COMPLETED);
-                    keyEntity.setResponseStatus(200);
+                    keyEntity.setResponseStatus(successStatus);
+                    keyEntity.setResponseHeaders(headers);
                     keyEntity.setResponseBody(json);
                     repository.save(keyEntity);
+
+                    return new IdempotentResponse<>(successStatus, headers, result);
                 } catch (JsonProcessingException e) {
                     throw new IllegalStateException("Failed to serialize response for idempotency key: " + key, e);
                 }
-                return result;
             });
         } catch (Exception ex) {
             log.warn("Business operation failed for idempotency key {}/{}, releasing claim: {}",

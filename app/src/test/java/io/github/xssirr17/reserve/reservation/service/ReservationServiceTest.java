@@ -7,6 +7,7 @@ import io.github.xssirr17.reserve.common.error.InvalidStateTransitionException;
 import io.github.xssirr17.reserve.common.error.NotFoundException;
 import io.github.xssirr17.reserve.common.metrics.ReservationMetrics;
 import io.github.xssirr17.reserve.idempotency.IdempotencyService;
+import io.github.xssirr17.reserve.idempotency.IdempotentResponse;
 import io.github.xssirr17.reserve.outbox.domain.OutboxEvent;
 import io.github.xssirr17.reserve.outbox.domain.OutboxEventRepository;
 import io.github.xssirr17.reserve.reservation.domain.Reservation;
@@ -88,10 +89,11 @@ class ReservationServiceTest {
         UUID slotId = UUID.randomUUID();
         CreateReservationRequest request = new CreateReservationRequest(slotId, "user1", 2);
 
-        when(idempotencyService.execute(any(), eq("key-123"), eq(request), eq(ReservationResponse.class), any()))
+        when(idempotencyService.execute(any(), eq("key-123"), eq(request), eq(ReservationResponse.class), eq(201), any(), any()))
             .thenAnswer(invocation -> {
-                Supplier<ReservationResponse> supplier = invocation.getArgument(4);
-                return supplier.get();
+                Supplier<ReservationResponse> supplier = invocation.getArgument(6);
+                ReservationResponse res = supplier.get();
+                return IdempotentResponse.of(201, java.util.Map.of("Location", "/api/reservations/" + res.id()), res);
             });
 
         Slot slot = new Slot(UUID.randomUUID(), now.plusSeconds(3600), now.plusSeconds(7200), 10);
@@ -102,12 +104,14 @@ class ReservationServiceTest {
         ReflectionTestUtils.setField(savedReservation, "id", UUID.randomUUID());
         when(reservationRepository.save(any(Reservation.class))).thenReturn(savedReservation);
 
-        ReservationResponse response = reservationService.createReservation(request, "key-123");
+        IdempotentResponse<ReservationResponse> response = reservationService.createReservation(request, "key-123");
 
         assertThat(response).isNotNull();
-        assertThat(response.userId()).isEqualTo("user1");
-        assertThat(response.quantity()).isEqualTo(2);
-        assertThat(response.status()).isEqualTo(ReservationStatus.PENDING);
+        assertThat(response.statusCode()).isEqualTo(201);
+        assertThat(response.headers().get("Location")).contains("/api/reservations/");
+        assertThat(response.body().userId()).isEqualTo("user1");
+        assertThat(response.body().quantity()).isEqualTo(2);
+        assertThat(response.body().status()).isEqualTo(ReservationStatus.PENDING);
 
         verify(slotRepository).reserve(slotId, 2);
         verify(outboxEventRepository).save(any(OutboxEvent.class));

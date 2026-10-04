@@ -19,12 +19,18 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.hibernate.exception.JDBCConnectionException;
+import org.springframework.transaction.CannotCreateTransactionException;
+
+import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -69,6 +75,24 @@ class GlobalExceptionHandlerTest {
 
         @PostMapping("/validation")
         public void validation(@RequestBody @Valid DummyPayload payload) {
+        }
+
+        @GetMapping("/pool-exhaustion/cannot-create-tx")
+        public void cannotCreateTx() {
+            throw new CannotCreateTransactionException(
+                "Could not open JPA EntityManager for transaction",
+                new SQLTransientConnectionException("Connection is not available, request timed out after 5000ms.")
+            );
+        }
+
+        @GetMapping("/pool-exhaustion/jdbc-conn")
+        public void jdbcConnection() {
+            throw new JDBCConnectionException("Unable to acquire JDBC Connection", new SQLException("Connection refused"));
+        }
+
+        @GetMapping("/pool-exhaustion/sql-transient")
+        public void sqlTransient() throws SQLException {
+            throw new SQLTransientConnectionException("HikariCP pool reserve-pool exhausted");
         }
     }
 
@@ -137,5 +161,42 @@ class GlobalExceptionHandlerTest {
             .andExpect(jsonPath("$.type", is("urn:problem-type:validation-error")))
             .andExpect(jsonPath("$.errors.name", notNullValue()))
             .andExpect(jsonPath("$.errors.count", notNullValue()));
+    }
+
+    @Test
+    @DisplayName("CannotCreateTransactionException returns 503 with Retry-After header")
+    void testCannotCreateTransactionException() throws Exception {
+        mockMvc.perform(get("/test/errors/pool-exhaustion/cannot-create-tx"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(header().string("Retry-After", "2"))
+            .andExpect(jsonPath("$.title", is("Service Unavailable")))
+            .andExpect(jsonPath("$.status", is(503)))
+            .andExpect(jsonPath("$.type", is("urn:problem-type:service-unavailable")))
+            .andExpect(jsonPath("$.detail", is("Database connection temporarily unavailable, please retry shortly")))
+            .andExpect(jsonPath("$.timestamp", notNullValue()));
+    }
+
+    @Test
+    @DisplayName("JDBCConnectionException returns 503 with Retry-After header")
+    void testJdbcConnectionException() throws Exception {
+        mockMvc.perform(get("/test/errors/pool-exhaustion/jdbc-conn"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(header().string("Retry-After", "2"))
+            .andExpect(jsonPath("$.title", is("Service Unavailable")))
+            .andExpect(jsonPath("$.status", is(503)))
+            .andExpect(jsonPath("$.type", is("urn:problem-type:service-unavailable")))
+            .andExpect(jsonPath("$.detail", is("Database connection temporarily unavailable, please retry shortly")));
+    }
+
+    @Test
+    @DisplayName("SQLTransientConnectionException returns 503 with Retry-After header")
+    void testSqlTransientConnectionException() throws Exception {
+        mockMvc.perform(get("/test/errors/pool-exhaustion/sql-transient"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(header().string("Retry-After", "2"))
+            .andExpect(jsonPath("$.title", is("Service Unavailable")))
+            .andExpect(jsonPath("$.status", is(503)))
+            .andExpect(jsonPath("$.type", is("urn:problem-type:service-unavailable")))
+            .andExpect(jsonPath("$.detail", is("Database connection temporarily unavailable, please retry shortly")));
     }
 }

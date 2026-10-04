@@ -431,7 +431,7 @@
     },
     {
       "name": "03 - Reservations",
-      "description": "Manages the lifecycle of reservations (PENDING -> CONFIRMED / CANCELLED). Creating a reservation atomically decrements available slot capacity and records an outbox event. Confirmation is coordinated via an external payment saga. Cancellation idempotently releases capacity.\n\nNote: A 'list by user' endpoint is not exposed by ReservationController (even though the underlying service supports it).",
+      "description": "Manages the lifecycle of reservations (PENDING -> CONFIRMED / CANCELLED). Creating a reservation atomically decrements available slot capacity and records an outbox event. Confirmation is coordinated via an external payment saga. Cancellation idempotently releases capacity. Paginated listing by user is supported via GET /api/reservations?userId=...",
       "item": [
         {
           "name": "Create Reservation",
@@ -616,6 +616,58 @@
               ]
             },
             "description": "Cancels reservation and releases slot capacity. Locks reservation row first, transitions to CANCELLED, and releases capacity. Re-calling cancel on an already CANCELLED reservation is idempotent and does not release capacity a second time.\n\nExpected Responses:\n- 200 OK: Status updated to CANCELLED.\n- 404 Not Found: Reservation not found.\n- 409 Conflict: Terminal state (EXPIRED, COMPLETED)."
+          },
+          "response": []
+        },
+        {
+          "name": "List Reservations by User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const jsonData = pm.response.json();",
+                  "pm.test(\"Response has paginated reservations array\", function () {",
+                  "    pm.expect(jsonData.content).to.be.an(\"array\");",
+                  "    pm.expect(jsonData.pageable).to.be.an(\"object\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reservations?userId={{userId}}&page=0&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Lists paginated reservations for a given userId.\n\nExpected Responses:\n- 200 OK: Returns Page<ReservationResponse>."
           },
           "response": []
         }
@@ -820,8 +872,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Rejects request when Idempotency-Key is missing (400 or 500 Problem Detail)\", function () {",
-                  "    pm.expect(pm.response.code).to.be.oneOf([400, 500]);",
+                  "pm.test(\"Rejects request when Idempotency-Key is missing (400 Bad Request)\", function () {",
+                  "    pm.response.to.have.status(400);",
                   "});",
                   "",
                   "const jsonData = pm.response.json();",

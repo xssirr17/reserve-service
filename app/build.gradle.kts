@@ -37,9 +37,12 @@ tasks.named<Test>("test") {
     }
 }
 
+val testSourceSets = project.extensions.getByType<SourceSetContainer>()
 val integrationTest = tasks.register<Test>("integrationTest") {
     description = "Runs integration tests against live PostgreSQL and Redis."
     group = "verification"
+    testClassesDirs = testSourceSets["test"].output.classesDirs
+    classpath = testSourceSets["test"].runtimeClasspath
     useJUnitPlatform {
         includeTags("integration")
     }

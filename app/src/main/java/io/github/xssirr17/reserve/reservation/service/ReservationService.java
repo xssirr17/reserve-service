@@ -7,6 +7,7 @@ import io.github.xssirr17.reserve.common.error.InvalidStateTransitionException;
 import io.github.xssirr17.reserve.common.error.NotFoundException;
 import io.github.xssirr17.reserve.common.metrics.ReservationMetrics;
 import io.github.xssirr17.reserve.idempotency.IdempotencyService;
+import io.github.xssirr17.reserve.idempotency.IdempotentResponse;
 import io.github.xssirr17.reserve.outbox.domain.OutboxEvent;
 import io.github.xssirr17.reserve.outbox.domain.OutboxEventRepository;
 import io.github.xssirr17.reserve.reservation.domain.Reservation;
@@ -62,12 +63,21 @@ public class ReservationService {
 
     /**
      * Create a reservation. If an idempotency key is provided, wraps execution with IdempotencyService.
+     * No @Transactional here: IdempotencyService's TransactionTemplate owns the business transaction.
      */
-    @Transactional(rollbackFor = Exception.class)
-    public ReservationResponse createReservation(CreateReservationRequest request, String idempotencyKey) {
+    public IdempotentResponse<ReservationResponse> createReservation(CreateReservationRequest request, String idempotencyKey) {
+        if (request.quantity() == null || request.quantity() <= 0 || request.quantity() > CreateReservationRequest.MAX_QUANTITY) {
+            throw new IllegalArgumentException("Reservation quantity must be between 1 and " + CreateReservationRequest.MAX_QUANTITY);
+        }
         String scope = "user:" + request.userId() + ":POST:/api/reservations";
-        return idempotencyService.execute(scope, idempotencyKey, request, ReservationResponse.class, () ->
-            createReservationInternal(request)
+        return idempotencyService.execute(
+            scope,
+            idempotencyKey,
+            request,
+            ReservationResponse.class,
+            201,
+            resp -> java.util.Map.of("Location", "/api/reservations/" + resp.id()),
+            () -> createReservationInternal(request)
         );
     }
 
@@ -206,7 +216,8 @@ public class ReservationService {
 
     @Transactional(readOnly = true)
     public Page<ReservationResponse> listByUser(String userId, Pageable pageable) {
-        return reservationRepository.findByUserId(userId, pageable)
+        Pageable clamped = io.github.xssirr17.reserve.common.util.PageUtils.clamp(pageable);
+        return reservationRepository.findByUserId(userId, clamped)
             .map(ReservationResponse::from);
     }
 }

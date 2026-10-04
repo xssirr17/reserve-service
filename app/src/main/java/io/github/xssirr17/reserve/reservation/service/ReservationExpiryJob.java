@@ -18,7 +18,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 @Service
 public class ReservationExpiryJob {
@@ -67,29 +75,67 @@ public class ReservationExpiryJob {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int processBatch(int batchSize) {
-        Instant now = clock.instant();
-        List<Reservation> expiredList = reservationRepository.findExpiredPendingForUpdateSkipLocked(now, batchSize);
+        long startNanos = System.nanoTime();
+        try {
+            Instant now = clock.instant();
+            List<Reservation> expiredList = new ArrayList<>(reservationRepository.findExpiredPendingForUpdateSkipLocked(now, batchSize));
 
-        if (expiredList.isEmpty()) {
-            return 0;
+            if (expiredList.isEmpty()) {
+                long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+                if (metrics != null) {
+                    metrics.recordExpiryBatch(0, durationMs);
+                }
+                return 0;
+            }
+
+            // Sort reservations consistently by slotId, then id
+            expiredList.sort(Comparator.comparing(Reservation::getSlotId).thenComparing(Reservation::getId));
+
+            // Aggregate capacity release per slot to minimize DB round-trips and prevent deadlocks
+            Map<UUID, Integer> releaseBySlot = new LinkedHashMap<>();
+            for (Reservation reservation : expiredList) {
+                reservation.setStatus(ReservationStatus.EXPIRED);
+                releaseBySlot.merge(reservation.getSlotId(), reservation.getQuantity(), Integer::sum);
+
+                String payload = String.format("{\"reservationId\":\"%s\",\"slotId\":\"%s\",\"userId\":\"%s\",\"quantity\":%d,\"status\":\"EXPIRED\"}",
+                    reservation.getId(), reservation.getSlotId(), reservation.getUserId(), reservation.getQuantity());
+                outboxEventRepository.save(new OutboxEvent("RESERVATION", reservation.getId().toString(), "ReservationExpired", payload));
+
+                if (metrics != null) {
+                    metrics.incrementExpired();
+                }
+            }
+
+            // Acquire slot row locks in strictly sorted order of slotId
+            List<UUID> sortedSlotIds = new ArrayList<>(releaseBySlot.keySet());
+            Collections.sort(sortedSlotIds);
+
+            Set<UUID> resourceIdsToInvalidate = new HashSet<>();
+            for (UUID slotId : sortedSlotIds) {
+                int totalQuantity = releaseBySlot.get(slotId);
+                slotRepository.release(slotId, totalQuantity);
+                slotRepository.findById(slotId)
+                    .ifPresent(slot -> resourceIdsToInvalidate.add(slot.getResourceId()));
+            }
+
+            for (UUID resourceId : resourceIdsToInvalidate) {
+                availabilityCacheService.invalidateResourceAfterCommit(resourceId);
+            }
+
+            reservationRepository.saveAll(expiredList);
+            long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+            if (metrics != null) {
+                metrics.recordExpiryBatch(expiredList.size(), durationMs);
+            }
+            log.info("Expired and released capacity for {} reservations across {} slots in {} ms",
+                expiredList.size(), sortedSlotIds.size(), durationMs);
+            return expiredList.size();
+        } catch (Exception ex) {
+            long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+            if (metrics != null) {
+                metrics.recordExpiryBatch(0, durationMs);
+            }
+            throw ex;
         }
-
-        for (Reservation reservation : expiredList) {
-            reservation.setStatus(ReservationStatus.EXPIRED);
-            slotRepository.release(reservation.getSlotId(), reservation.getQuantity());
-
-            String payload = String.format("{\"reservationId\":\"%s\",\"slotId\":\"%s\",\"userId\":\"%s\",\"quantity\":%d,\"status\":\"EXPIRED\"}",
-                reservation.getId(), reservation.getSlotId(), reservation.getUserId(), reservation.getQuantity());
-            outboxEventRepository.save(new OutboxEvent("RESERVATION", reservation.getId().toString(), "ReservationExpired", payload));
-
-            metrics.incrementExpired();
-
-            slotRepository.findById(reservation.getSlotId())
-                .ifPresent(slot -> availabilityCacheService.invalidateResourceAfterCommit(slot.getResourceId()));
-        }
-
-        reservationRepository.saveAll(expiredList);
-        log.info("Expired and released capacity for {} reservations", expiredList.size());
-        return expiredList.size();
     }
 }

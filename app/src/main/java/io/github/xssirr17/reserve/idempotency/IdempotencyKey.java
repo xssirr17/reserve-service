@@ -34,6 +34,10 @@ public class IdempotencyKey {
     @Column(name = "response_body", columnDefinition = "jsonb")
     private String responseBody;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "response_headers", columnDefinition = "jsonb")
+    private java.util.Map<String, String> responseHeaders;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -86,6 +90,14 @@ public class IdempotencyKey {
 
     public void setResponseBody(String responseBody) {
         this.responseBody = responseBody;
+    }
+
+    public java.util.Map<String, String> getResponseHeaders() {
+        return responseHeaders;
+    }
+
+    public void setResponseHeaders(java.util.Map<String, String> responseHeaders) {
+        this.responseHeaders = responseHeaders;
     }
 
     public Instant getCreatedAt() {

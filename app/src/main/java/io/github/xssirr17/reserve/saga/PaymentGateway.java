@@ -4,7 +4,9 @@ import java.util.UUID;
 
 public interface PaymentGateway {
 
-    PaymentResult processPayment(UUID reservationId, int amount);
+    PaymentResult processPayment(UUID reservationId, int amount, String paymentIdempotencyKey);
+
+    PaymentResult refundPayment(UUID reservationId, String paymentIdempotencyKey);
 
     record PaymentResult(boolean success, String transactionId, String errorMessage) {
         public static PaymentResult success(String transactionId) {

@@ -84,6 +84,8 @@ public class ReservationProperties {
         private int batchSize = 50;
         private long intervalMs = 2000;
         private int maxAttempts = 5;
+        private Duration leaseDuration = Duration.ofSeconds(30);
+        private Duration retryBackoff = Duration.ofSeconds(5);
 
         public int getBatchSize() {
             return batchSize;
@@ -107,6 +109,22 @@ public class ReservationProperties {
 
         public void setMaxAttempts(int maxAttempts) {
             this.maxAttempts = maxAttempts;
+        }
+
+        public Duration getLeaseDuration() {
+            return leaseDuration;
+        }
+
+        public void setLeaseDuration(Duration leaseDuration) {
+            this.leaseDuration = leaseDuration;
+        }
+
+        public Duration getRetryBackoff() {
+            return retryBackoff;
+        }
+
+        public void setRetryBackoff(Duration retryBackoff) {
+            this.retryBackoff = retryBackoff;
         }
     }
 
@@ -134,6 +152,7 @@ public class ReservationProperties {
     public static class CacheProperties {
         private Duration ttl = Duration.ofMinutes(10);
         private long jitterMaxSeconds = 30;
+        private Duration waitTimeout = Duration.ofSeconds(5);
 
         public Duration getTtl() {
             return ttl;
@@ -149,6 +168,14 @@ public class ReservationProperties {
 
         public void setJitterMaxSeconds(long jitterMaxSeconds) {
             this.jitterMaxSeconds = jitterMaxSeconds;
+        }
+
+        public Duration getWaitTimeout() {
+            return waitTimeout;
+        }
+
+        public void setWaitTimeout(Duration waitTimeout) {
+            this.waitTimeout = waitTimeout;
         }
     }
 }

@@ -18,7 +18,10 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 @Service
@@ -67,24 +70,49 @@ public class AvailabilityCacheService {
 
         metrics.incrementCacheMisses();
 
-        // 2. Single-flight stampede protection: collapse concurrent requests for identical key
-        CompletableFuture<Page<SlotResponse>> future = inFlightRequests.computeIfAbsent(cacheKey, k -> CompletableFuture.supplyAsync(() -> {
+        // 2. Single-flight stampede protection: synchronous leader on calling thread, followers wait
+        CompletableFuture<Page<SlotResponse>> myFuture = new CompletableFuture<>();
+        CompletableFuture<Page<SlotResponse>> existingFuture = inFlightRequests.putIfAbsent(cacheKey, myFuture);
+
+        if (existingFuture == null) {
+            // Leader thread: execute DB fallback synchronously on THIS calling thread
             try {
                 Page<SlotResponse> dbResult = dbFallback.get();
-                putInCache(k, dbResult);
+                putInCache(cacheKey, dbResult);
+                myFuture.complete(dbResult);
                 return dbResult;
+            } catch (Throwable t) {
+                myFuture.completeExceptionally(t);
+                if (t instanceof RuntimeException re) {
+                    throw re;
+                }
+                throw new RuntimeException(t);
             } finally {
-                inFlightRequests.remove(k);
+                inFlightRequests.remove(cacheKey, myFuture);
             }
-        }));
-
-        try {
-            return future.join();
-        } catch (Exception ex) {
-            inFlightRequests.remove(cacheKey);
-            log.warn("Single-flight execution failed for key {}, falling back to direct DB read: {}", cacheKey, ex.getMessage());
-            return dbFallback.get();
+        } else {
+            // Follower thread: wait for leader's result with bounded timeout
+            try {
+                Duration waitTimeout = properties.getCache().getWaitTimeout();
+                return existingFuture.get(waitTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                log.warn("Single-flight wait timed out for key {}, falling back to direct DB read", cacheKey);
+                return dbFallback.get();
+            } catch (ExecutionException ee) {
+                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                if (cause instanceof RuntimeException re) {
+                    throw re;
+                }
+                throw new RuntimeException(cause);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return dbFallback.get();
+            }
         }
+    }
+
+    int getInFlightCount() {
+        return inFlightRequests.size();
     }
 
     public void invalidateResourceAfterCommit(UUID resourceId) {

@@ -49,6 +49,9 @@ public class OutboxEvent {
     @Column(name = "published_at")
     private Instant publishedAt;
 
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
+
     protected OutboxEvent() {
         // required by JPA
     }
@@ -108,6 +111,14 @@ public class OutboxEvent {
 
     public void setPublishedAt(Instant publishedAt) {
         this.publishedAt = publishedAt;
+    }
+
+    public Instant getLockedUntil() {
+        return lockedUntil;
+    }
+
+    public void setLockedUntil(Instant lockedUntil) {
+        this.lockedUntil = lockedUntil;
     }
 
     @Override

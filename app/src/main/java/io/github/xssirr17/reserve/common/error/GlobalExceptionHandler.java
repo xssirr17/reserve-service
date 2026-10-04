@@ -16,7 +16,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import org.hibernate.exception.JDBCConnectionException;
+import org.springframework.transaction.CannotCreateTransactionException;
+
 import java.net.URI;
+import java.sql.SQLTransientConnectionException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -142,6 +146,54 @@ public class GlobalExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
+    public ProblemDetail handleConstraintViolation(jakarta.validation.ConstraintViolationException ex) {
+        log.warn("Constraint violation on request: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Validation failed for request parameters");
+        problem.setTitle("Bad Request");
+        problem.setType(URI.create("urn:problem-type:validation-error"));
+        problem.setProperty("timestamp", Instant.now());
+
+        Map<String, String> errors = new LinkedHashMap<>();
+        for (jakarta.validation.ConstraintViolation<?> violation : ex.getConstraintViolations()) {
+            errors.put(violation.getPropertyPath().toString(), violation.getMessage());
+        }
+        problem.setProperty("errors", errors);
+        return problem;
+    }
+
+    @ExceptionHandler(org.springframework.web.method.annotation.HandlerMethodValidationException.class)
+    public ProblemDetail handleHandlerMethodValidation(org.springframework.web.method.annotation.HandlerMethodValidationException ex) {
+        log.warn("Handler method validation error: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Validation failed for request parameters");
+        problem.setTitle("Bad Request");
+        problem.setType(URI.create("urn:problem-type:validation-error"));
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ProblemDetail handleMissingServletRequestParameter(org.springframework.web.bind.MissingServletRequestParameterException ex) {
+        log.warn("Missing request parameter: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        problem.setType(URI.create("urn:problem-type:missing-parameter"));
+        problem.setProperty("timestamp", Instant.now());
+        problem.setProperty("parameter", ex.getParameterName());
+        return problem;
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MissingRequestHeaderException.class)
+    public ProblemDetail handleMissingRequestHeader(org.springframework.web.bind.MissingRequestHeaderException ex) {
+        log.warn("Missing request header: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Bad Request");
+        problem.setType(URI.create("urn:problem-type:missing-header"));
+        problem.setProperty("timestamp", Instant.now());
+        problem.setProperty("header", ex.getHeaderName());
+        return problem;
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ProblemDetail handleHttpMessageNotReadable(HttpMessageNotReadableException ex) {
         log.warn("Malformed HTTP message: {}", ex.getMessage());
@@ -173,6 +225,25 @@ public class GlobalExceptionHandler {
         problem.setType(URI.create("urn:problem-type:illegal-argument"));
         problem.setProperty("timestamp", Instant.now());
         return problem;
+    }
+
+    @ExceptionHandler({
+        CannotCreateTransactionException.class,
+        JDBCConnectionException.class,
+        SQLTransientConnectionException.class
+    })
+    public ResponseEntity<ProblemDetail> handleConnectionPoolExhaustion(Exception ex) {
+        log.error("Database connection failure or pool exhaustion: {}", ex.getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Database connection temporarily unavailable, please retry shortly"
+        );
+        problem.setTitle("Service Unavailable");
+        problem.setType(URI.create("urn:problem-type:service-unavailable"));
+        problem.setProperty("timestamp", Instant.now());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+            .header(HttpHeaders.RETRY_AFTER, "2")
+            .body(problem);
     }
 
     @ExceptionHandler(Exception.class)

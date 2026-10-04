@@ -51,21 +51,36 @@ sequenceDiagram
 
     Client->>Controller: POST /api/reservations/{id}/confirm
     Controller->>Saga: executeConfirmationSaga(id)
+
+    Note over Saga,DB: Pre-check reservation state
+    Saga->>Service: getReservation(id)
+    alt Already CONFIRMED
+        Saga-->>Controller: 200 OK (CONFIRMED) [0 payment calls]
+    else CANCELLED or EXPIRED
+        Saga-->>Controller: 409 Conflict [0 payment calls]
+    end
     
-    Note over Saga,Ext: External step executed OUTSIDE any DB transaction
-    Saga->>Ext: processPayment(reservationId, amount)
+    Note over Saga,Ext: External step executed OUTSIDE DB transaction using idempotency key 'pay:reservation:<id>'
+    Saga->>Ext: processPayment(reservationId, amount, paymentIdempotencyKey)
 
     alt Payment Succeeded
         Ext-->>Saga: PaymentResult.success(txnId)
         Note over Saga,DB: New DB Transaction
         Saga->>Service: confirmReservation(id)
-        Service->>DB: SELECT ... FOR UPDATE (verify PENDING & not expired)
-        Service->>DB: UPDATE reservations SET status = 'CONFIRMED'
-        Service->>DB: INSERT INTO outbox_events (ReservationConfirmed)
-        DB-->>Service: Transaction Committed
-        Service-->>Saga: ReservationResponse(CONFIRMED)
-        Saga-->>Controller: 200 OK (CONFIRMED)
-        Controller-->>Client: 200 OK (CONFIRMED)
+        alt Confirm Succeeded
+            Service->>DB: SELECT ... FOR UPDATE (verify PENDING & not expired)
+            Service->>DB: UPDATE reservations SET status = 'CONFIRMED'
+            Service->>DB: INSERT INTO outbox_events (ReservationConfirmed)
+            DB-->>Service: Transaction Committed
+            Service-->>Saga: ReservationResponse(CONFIRMED)
+            Saga-->>Controller: 200 OK (CONFIRMED)
+            Controller-->>Client: 200 OK (CONFIRMED)
+        else Local Confirm Failed (e.g. Expired / DB Error)
+            Note over Saga,Ext: Compensate Payment & Cancel Reservation
+            Saga->>Ext: refundPayment(paymentIdempotencyKey, amount)
+            Saga->>Service: cancelReservation(id)
+            Saga-->>Controller: 409 Conflict
+        end
     else Payment Failed or Timed Out
         Ext-->>Saga: PaymentResult.failure("Insufficient funds")
         Note over Saga,DB: Compensation in New DB Transaction
@@ -80,10 +95,10 @@ sequenceDiagram
         Controller-->>Client: 200 OK (CANCELLED)
     end
 
-    opt Asynchronous Event Publishing
-        Outbox->>DB: SELECT ... FOR UPDATE SKIP LOCKED
-        Outbox->>Outbox: publish(event) to EventPublisher
-        Outbox->>DB: UPDATE outbox_events SET status = 'PUBLISHED'
+    opt Asynchronous Event Publishing (Claim/Lease)
+        Outbox->>DB: Tx 1: SELECT ... FOR UPDATE SKIP LOCKED & set locked_until
+        Outbox->>Outbox: publish(event) to EventPublisher (outside DB Tx)
+        Outbox->>DB: Tx 2: UPDATE outbox_events SET published_at = now
     end
 ```
 
@@ -93,4 +108,5 @@ sequenceDiagram
 
 * **Service Crash Before Payment**: The reservation remains `PENDING`. When `expires_at` is reached, `ReservationExpiryJob` acquires the row via `SELECT ... FOR UPDATE SKIP LOCKED`, transitions it to `EXPIRED`, releases the held capacity, and writes a `ReservationExpired` outbox event.
 * **Service Crash After Payment But Before Confirm**: If the payment gateway succeeds but the service crashes before confirming, the transaction can be safely reconciled via idempotency or payment webhook replay.
-* **Duplicate Saga Calls**: Calling confirm on an already `CONFIRMED` reservation returns the current state immediately without duplicate external charges or errors.
+* **Duplicate Saga Calls**: Calling confirm on an already `CONFIRMED` reservation returns the current state immediately without duplicate external charges or errors. Concurrent confirm requests use the unique payment idempotency key `pay:reservation:<id>`, ensuring the payment gateway records exactly one charge.
+* **Remaining Operational Limits**: If a network partition causes the payment gateway call to time out, the gateway may have processed the charge. The saga attempts a safe refund compensation; if communication with the payment gateway is permanently partitioned, the local reservation will expire via `ReservationExpiryJob`, requiring asynchronous settlement reconciliation (e.g. daily payment gateway reconciliation reports or incoming gateway webhooks).

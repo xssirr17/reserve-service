@@ -44,11 +44,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("integration")
 @SpringBootTest
 @TestPropertySource(properties = {
-    "spring.datasource.url=${TEST_DB_URL:jdbc:postgresql://localhost:5432/reserve_test}",
+    "spring.datasource.url=${TEST_DB_URL:jdbc:postgresql://localhost:5432/reserve}",
     "spring.datasource.username=${TEST_DB_USERNAME:postgres}",
-    "spring.datasource.password=${TEST_DB_PASSWORD:postgres}",
+    "spring.datasource.password=${TEST_DB_PASSWORD:}",
     "spring.data.redis.host=${TEST_REDIS_HOST:localhost}",
     "spring.data.redis.port=${TEST_REDIS_PORT:6379}",
+    "spring.datasource.hikari.maximum-pool-size=30",
     "spring.jpa.hibernate.ddl-auto=validate"
 })
 class ConcurrentReservationIntegrationTest {
@@ -138,7 +139,7 @@ class ConcurrentReservationIntegrationTest {
         UUID slotId = slot.getId();
 
         CreateReservationRequest request = new CreateReservationRequest(slotId, "cancel-user", 3);
-        ReservationResponse reservation = reservationService.createReservation(request, "cancel-key-" + UUID.randomUUID());
+        ReservationResponse reservation = reservationService.createReservation(request, "cancel-key-" + UUID.randomUUID()).body();
         UUID reservationId = reservation.id();
 
         Slot afterReserve = slotRepository.findById(slotId).orElseThrow();
@@ -194,7 +195,7 @@ class ConcurrentReservationIntegrationTest {
         for (int i = 0; i < threadCount; i++) {
             futures.add(executor.submit(() -> {
                 startLatch.await();
-                return reservationService.createReservation(request, sharedKey);
+                return reservationService.createReservation(request, sharedKey).body();
             }));
         }
 
@@ -228,7 +229,8 @@ class ConcurrentReservationIntegrationTest {
 
         // Create 10 expired PENDING reservations directly in DB
         Instant pastExpiry = Instant.now().minus(10, ChronoUnit.MINUTES);
-        slotRepository.reserve(slotId, 10);
+        org.springframework.test.util.ReflectionTestUtils.setField(slot, "reserved", 10);
+        slotRepository.save(slot);
 
         for (int i = 0; i < 10; i++) {
             Reservation r = new Reservation(slotId, "exp-user-" + i, 1, ReservationStatus.PENDING, pastExpiry);
@@ -259,6 +261,63 @@ class ConcurrentReservationIntegrationTest {
 
         Slot updatedSlot = slotRepository.findById(slotId).orElseThrow();
         assertThat(updatedSlot.getReserved()).isEqualTo(0); // All 10 capacity released
+    }
+
+    @Test
+    @DisplayName("Two expiry runners over many reservations across several slots: no deadlocks, each expired and released once")
+    void testConcurrentExpiryAcrossMultipleSlotsNoDeadlock() throws Exception {
+        int numSlots = 5;
+        int reservationsPerSlot = 8;
+        List<UUID> slotIds = new ArrayList<>();
+        Instant pastExpiry = Instant.now().minus(10, ChronoUnit.MINUTES);
+
+        for (int i = 0; i < numSlots; i++) {
+            Instant start = Instant.now().plus(i + 1, ChronoUnit.DAYS);
+            Instant end = start.plus(1, ChronoUnit.HOURS);
+            Slot slot = new Slot(testResource.getId(), start, end, 20);
+            slot.setReserved(reservationsPerSlot);
+            slot = slotRepository.save(slot);
+            slotIds.add(slot.getId());
+
+            for (int j = 0; j < reservationsPerSlot; j++) {
+                Reservation r = new Reservation(slot.getId(), "user-" + i + "-" + j, 1, ReservationStatus.PENDING, pastExpiry);
+                reservationRepository.save(r);
+            }
+        }
+
+        int totalReservations = numSlots * reservationsPerSlot;
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch startLatch = new CountDownLatch(1);
+
+        Future<Integer> job1 = executor.submit(() -> {
+            startLatch.await();
+            int total = 0;
+            for (int k = 0; k < 5; k++) {
+                total += reservationExpiryJob.processBatch(10);
+            }
+            return total;
+        });
+
+        Future<Integer> job2 = executor.submit(() -> {
+            startLatch.await();
+            int total = 0;
+            for (int k = 0; k < 5; k++) {
+                total += reservationExpiryJob.processBatch(10);
+            }
+            return total;
+        });
+
+        startLatch.countDown();
+        int count1 = job1.get(15, TimeUnit.SECONDS);
+        int count2 = job2.get(15, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        assertThat(count1 + count2).isEqualTo(totalReservations);
+
+        for (UUID sId : slotIds) {
+            Slot updatedSlot = slotRepository.findById(sId).orElseThrow();
+            assertThat(updatedSlot.getReserved()).isEqualTo(0);
+        }
     }
 
     @Test

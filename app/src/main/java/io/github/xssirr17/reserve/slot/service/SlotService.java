@@ -53,8 +53,8 @@ public class SlotService {
             throw new IllegalArgumentException("endTime must be strictly after startTime");
         }
 
-        if (request.capacity() <= 0) {
-            throw new IllegalArgumentException("capacity must be positive");
+        if (request.capacity() == null || request.capacity() <= 0 || request.capacity() > CreateSlotRequest.MAX_CAPACITY) {
+            throw new IllegalArgumentException("capacity must be between 1 and " + CreateSlotRequest.MAX_CAPACITY);
         }
 
         if (slotRepository.hasOverlappingSlot(resourceId, request.startTime(), request.endTime())) {
@@ -75,14 +75,14 @@ public class SlotService {
         }
     }
 
-    @Transactional(readOnly = true)
     public Page<SlotResponse> getAvailability(UUID resourceId, Instant from, Instant to, Pageable pageable) {
         if (!resourceRepository.existsById(resourceId)) {
             throw new NotFoundException("Resource not found: " + resourceId);
         }
 
-        return availabilityCacheService.getAvailability(resourceId, from, to, pageable, () ->
-            slotRepository.findByResourceIdAndTimeRange(resourceId, from, to, pageable)
+        Pageable clamped = io.github.xssirr17.reserve.common.util.PageUtils.clamp(pageable);
+        return availabilityCacheService.getAvailability(resourceId, from, to, clamped, () ->
+            slotRepository.findByResourceIdAndTimeRange(resourceId, from, to, clamped)
                 .map(SlotResponse::from)
         );
     }

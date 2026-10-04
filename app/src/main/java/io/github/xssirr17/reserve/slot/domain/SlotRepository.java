@@ -12,18 +12,6 @@ import java.util.UUID;
 
 public interface SlotRepository extends JpaRepository<Slot, UUID> {
 
-    @Query("""
-        SELECT s FROM Slot s
-        WHERE s.resourceId = :resourceId
-          AND s.startTime >= :from
-          AND s.endTime <= :to
-    """)
-    Page<Slot> findByResourceIdAndStartTimeGreaterThanEqualAndEndTimeLessThanEqual(
-        @Param("resourceId") UUID resourceId,
-        @Param("from") Instant from,
-        @Param("to") Instant to,
-        Pageable pageable
-    );
 
     @Query("""
         SELECT s FROM Slot s
@@ -56,7 +44,7 @@ public interface SlotRepository extends JpaRepository<Slot, UUID> {
         SET s.reserved = s.reserved + :quantity,
             s.version = s.version + 1
         WHERE s.id = :slotId
-          AND s.reserved + :quantity <= s.capacity
+          AND s.capacity - s.reserved >= :quantity
     """)
     int reserve(@Param("slotId") UUID slotId, @Param("quantity") int quantity);
 
