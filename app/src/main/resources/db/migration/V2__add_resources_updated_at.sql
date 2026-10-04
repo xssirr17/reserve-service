@@ -1,0 +1,1 @@
+ALTER TABLE resources ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
